@@ -1,4 +1,3 @@
-
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
@@ -14,8 +13,32 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  if (!openAIApiKey) {
+    return new Response(JSON.stringify({
+      isValid: false,
+      explanation: 'Server error: OpenAI API key not configured.',
+    }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
   try {
-    const { fileName, fileContent, fileType } = await req.json();
+    let body: any;
+    try {
+      body = await req.json();
+    } catch (err) {
+      console.error("Invalid JSON body:", await req.text());
+      throw new Error("Request body is not valid JSON.");
+    }
+
+    const { fileName, fileContent, fileType } = body;
+
+    if (!fileName || !fileContent || !fileType) {
+      throw new Error("Missing required fields: fileName, fileContent, or fileType.");
+    }
+
+    const preview = typeof fileContent === 'string' ? fileContent.substring(0, 1000) : '';
 
     const systemPrompt = `You are a bank statement validator. Your job is to determine if the uploaded file is a legitimate bank statement.
 
@@ -31,7 +54,7 @@ A valid bank statement should contain:
 Common formats include:
 - CSV files with columns like: Date, Description, Amount, Balance
 - PDF bank statements with transaction lists
-- Files from banks like Chase, Bank of America, Wells Fargo, etc.
+- Files from banks like Access bank,UBA,Stanbic ibtc, etc.
 
 Analyze the content and respond with:
 1. "valid" if it appears to be a bank statement
@@ -40,7 +63,7 @@ Analyze the content and respond with:
 
 File name: ${fileName}
 File type: ${fileType}
-Content preview: ${fileContent.substring(0, 1000)}`;
+Content preview: ${preview}`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -60,19 +83,27 @@ Content preview: ${fileContent.substring(0, 1000)}`;
     });
 
     const data = await response.json();
+
+    if (!data?.choices?.[0]?.message?.content) {
+      throw new Error("OpenAI response missing expected content.");
+    }
+
     const validation = data.choices[0].message.content;
+
+    console.log("OpenAI response:", validation);
 
     const isValid = validation.toLowerCase().includes('valid') && !validation.toLowerCase().includes('invalid');
 
-    return new Response(JSON.stringify({ 
+    return new Response(JSON.stringify({
       isValid,
       explanation: validation
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
+
   } catch (error) {
     console.error('Error in validate-bank-statement function:', error);
-    return new Response(JSON.stringify({ 
+    return new Response(JSON.stringify({
       isValid: false,
       explanation: 'Error validating file. Please try again.'
     }), {
